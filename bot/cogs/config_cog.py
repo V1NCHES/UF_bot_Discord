@@ -298,7 +298,7 @@ class ConfigCog(commands.Cog):
     @app_commands.command(name='info_ad', description="Справка по командам администратора")
     @app_commands.default_permissions(administrator=True)
     async def admin_info(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(ephemeral=True)
         admin_commands = (
             "**`/config_call [#channel]`**\n"
             "Настроить канал для команды `/call`.\n\n"
@@ -348,7 +348,7 @@ class ConfigCog(commands.Cog):
         )
         
         embed.set_footer(text="По всем вопросам обращайтесь к администраторам.")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(ConfigCog(bot))

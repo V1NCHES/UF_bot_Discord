@@ -38,31 +38,195 @@ def save_objectives(objs):
     with open('objectives.json', 'w', encoding='utf-8') as f:
         json.dump(objs, f, ensure_ascii=False, indent=4)
 
-def parse_objective_time(time_str: str) -> int:
+BIOME_ALLOWED_RESOURCES = {
+    'forest': ['wood', 'hide'],
+    'swamp': ['fiber', 'hide', 'wood'],
+    'steppe': ['fiber', 'hide', 'ore'],
+    'highland': ['wood', 'ore'],
+    'mountain': ['fiber', 'ore'],
+}
+
+RESOURCE_TYPE_MAP = {
+    'волокно': 'fiber', 'fiber': 'fiber',
+    'древесина': 'wood', 'wood': 'wood',
+    'кожа': 'hide', 'hide': 'hide',
+    'руда': 'ore', 'ore': 'ore',
+    'камень': 'rock', 'rock': 'rock', 'stone': 'rock'
+}
+
+RESOURCE_RU_NAMES = {
+    'fiber': 'Волокно (Fiber)',
+    'wood': 'Древесина (Wood)',
+    'hide': 'Кожа (Hide)',
+    'ore': 'Руда (Ore)',
+    'rock': 'Камень (Rock)'
+}
+
+BIOME_RU_NAMES = {
+    'forest': 'Лес (Forest)',
+    'swamp': 'Болото (Swamp)',
+    'steppe': 'Степь (Steppe)',
+    'highland': 'Хайленд (Highland)',
+    'mountain': 'Горы (Mountain)'
+}
+
+RESOURCE_TIER_ALLOWED_LOCATION_TIERS = {
+    '4.4': [5, 6],
+    '5.4': [5, 6, 7],
+    '6.4': [6, 7, 8],
+    '7.4': [7, 8],
+    '8.4': [8],
+}
+
+def parse_location_info(location_name: str):
+    if not location_name:
+        return None, None
+    loc_clean = location_name.strip().lower()
+    for val, name in ALBION_LOCATIONS:
+        if loc_clean == val.lower() or loc_clean == name.lower():
+            tier = None
+            if name.startswith("V "): tier = 5
+            elif name.startswith("VI "): tier = 6
+            elif name.startswith("VII "): tier = 7
+            elif name.startswith("VIII "): tier = 8
+            elif name.startswith("💀 "): tier = 8
+            
+            biome = None
+            if "🌲" in name: biome = "forest"
+            elif "🐉" in name: biome = "swamp"
+            elif "🐈" in name: biome = "steppe"
+            elif "🗻" in name: biome = "highland"
+            elif "❄" in name: biome = "mountain"
+            
+            return tier, biome
+    return None, None
+
+def get_max_objective_minutes(obj_type: str, tier: str) -> int:
+    t_lower = (obj_type or "").lower()
+    tier_lower = (tier or "").lower()
+    
+    # 1. Сундуки
+    if "сундук" in t_lower or "chest" in t_lower:
+        if "маленьк" in tier_lower or "small" in tier_lower:
+            return 5
+        elif "средн" in tier_lower or "medium" in tier_lower:
+            return 20
+        elif "золот" in tier_lower or "gold" in tier_lower or "больш" in tier_lower or "large" in tier_lower:
+            return 40
+        return 40
+        
+    # 2. Ядра / Сферы
+    elif "ядро" in t_lower or "core" in t_lower or "сфер" in t_lower or "sphere" in t_lower:
+        if "зелен" in tier_lower or "green" in tier_lower:
+            return 5
+        elif "син" in tier_lower or "blue" in tier_lower:
+            return 15
+        elif "фиолет" in tier_lower or "purple" in tier_lower:
+            return 40
+        elif "золот" in tier_lower or "gold" in tier_lower:
+            return 120
+        return 120
+        
+    # 3. Вихри
+    elif "вихрь" in t_lower or "vortex" in t_lower:
+        if "зелен" in tier_lower or "green" in tier_lower:
+            return 15
+        elif "син" in tier_lower or "blue" in tier_lower:
+            return 45
+        elif "фиолет" in tier_lower or "purple" in tier_lower:
+            return 120
+        elif "золот" in tier_lower or "gold" in tier_lower:
+            return 240
+        return 240
+        
+    # 4. Ресурсы
+    else:
+        if "4.4" in tier_lower or tier_lower == ".4" or tier_lower == "4":
+            return 60
+        elif "5.4" in tier_lower or tier_lower == ".5" or tier_lower == "5":
+            return 120
+        elif "6.4" in tier_lower or tier_lower == ".6" or tier_lower == "6":
+            return 240
+        elif "7.4" in tier_lower or tier_lower == ".7" or tier_lower == "7":
+            return 480
+        elif "8.4" in tier_lower or tier_lower == ".8" or tier_lower == "8":
+            return 960
+        return 960
+
+def parse_objective_time(time_str: str, max_minutes: int = None) -> int:
     import time
     from datetime import datetime, timezone, timedelta
     import re
     
     time_str = time_str.strip()
+    now_utc = datetime.now(timezone.utc)
+    target_dt = None
     
     if time_str.isdigit():
         minutes = int(time_str)
-        return int(time.time()) + minutes * 60
+        if minutes <= 0:
+            raise ValueError("❌ Время в минутах должно быть больше 0!")
+        target_dt = now_utc + timedelta(minutes=minutes)
+    else:
+        dt_match = re.match(r'^(\d{1,2})[\./-](\d{1,2})(?:[\./-](\d{2,4}))?\s+(\d{1,2})[:.-](\d{2})$', time_str)
+        if dt_match:
+            day = int(dt_match.group(1))
+            month = int(dt_match.group(2))
+            year_str = dt_match.group(3)
+            year = int(year_str) if year_str else now_utc.year
+            if year < 100: year += 2000
+            hours = int(dt_match.group(4))
+            minutes = int(dt_match.group(5))
+            try:
+                target_dt = datetime(year, month, day, hours, minutes, tzinfo=timezone.utc)
+            except ValueError:
+                raise ValueError("❌ Некорректная дата или время!")
+        else:
+            t_match = re.match(r'^(\d{1,2})[:.-](\d{2})(?:[:.-](\d{2}))?$', time_str)
+            if t_match:
+                hours = int(t_match.group(1))
+                minutes = int(t_match.group(2))
+                if hours > 23 or minutes > 59:
+                    raise ValueError("❌ Некорректное время! Часы от 00 до 23, минуты от 00 до 59.")
+                
+                candidate_dt = now_utc.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+                
+                if candidate_dt <= now_utc:
+                    candidate_tomorrow = candidate_dt + timedelta(days=1)
+                    if max_minutes:
+                        diff_min = (candidate_tomorrow - now_utc).total_seconds() / 60
+                        if diff_min <= max_minutes:
+                            target_dt = candidate_tomorrow
+                        else:
+                            passed_min = int((now_utc - candidate_dt).total_seconds() / 60)
+                            raise ValueError(
+                                f"❌ Указанное время {hours:02d}:{minutes:02d} UTC уже прошло сегодня ({passed_min} мин. назад).\n"
+                                f"Завтрашнее время {hours:02d}:{minutes:02d} UTC превышает макс. время открытия ({max_minutes} мин.)."
+                            )
+                    else:
+                        target_dt = candidate_tomorrow
+                else:
+                    target_dt = candidate_dt
+            else:
+                raise ValueError(
+                    "❌ Неверный формат времени!\n"
+                    "• Укажите количество минут (например, `23`)\n"
+                    "• Или UTC время (например, `15:40`)\n"
+                    "• Или дату и UTC время (например, `18.09 15:40`)."
+                )
+                
+    total_seconds = int((target_dt - now_utc).total_seconds())
+    if total_seconds <= 0:
+        raise ValueError("❌ Указанное время уже прошло!")
         
-    match = re.match(r'^(\d{1,2})[:.-](\d{2})$', time_str)
-    if match:
-        hours = int(match.group(1))
-        minutes = int(match.group(2))
+    minutes_left = total_seconds / 60
+    if max_minutes and minutes_left > max_minutes:
+        raise ValueError(
+            f"❌ Время до открытия ({int(minutes_left)} мин.) превышает максимально допустимое "
+            f"для этого объекта ({max_minutes} мин.)!"
+        )
         
-        now_utc = datetime.now(timezone.utc)
-        dt = now_utc.replace(hour=hours, minute=minutes, second=0, microsecond=0)
-        
-        if dt < now_utc:
-            dt += timedelta(days=1)
-            
-        return int(dt.timestamp())
-        
-    raise ValueError("❌ Неверный формат времени! Укажите количество минут (например, `23`) или UTC время (например, `15:40`).")
+    return int(target_dt.timestamp())
 
 def format_obj_name(obj_type: str, obj_tier: str) -> str:
     t_lower = obj_type.lower()
@@ -394,7 +558,7 @@ class ObjectivesCog(commands.Cog):
     @app_commands.command(name='obj_add', description="Добавление игрового объекта на карту")
     @app_commands.describe(
         type="Тип объекта (например: Ядро, Вихрь, Ресурсный узел)",
-        time_left="Время до открытия (минут: '23' или UTC время: '15:40')",
+        time_left="Время: в минутах ('23') или UTC время ('15:40' или '18.09 15:40')",
         tier="Тир/цвет объекта (необязательно; например: 8.4, Зеленое, Синее)",
         location="Название локации/карты (необязательно)",
         screenshot="Скриншот объекта (необязательно)"
@@ -430,25 +594,69 @@ class ObjectivesCog(commands.Cog):
                 ephemeral=True
             )
             
+        loc = location.strip() if location else "Рядом"
+        t_tier = tier.strip() if tier else ""
+        t_val = type.value
+        if not t_tier and ("сундук" in t_val.lower() or "chest" in t_val.lower()):
+            t_tier = "Золотой"
+            
+        t_val_lower = t_val.lower()
+        t_tier_lower = t_tier.lower()
+        
+        # 1. Проверка камня (Rock) на .4 зачарование
+        is_rock = "камень" in t_val_lower or "rock" in t_val_lower
+        is_dot4 = ".4" in t_tier_lower or t_tier in ["4.4", "5.4", "6.4", "7.4", "8.4"]
+        if is_rock and is_dot4:
+            return await interaction.response.send_message(
+                "❌ У камня (Rock) не бывает .4 зачарования!",
+                ephemeral=True
+            )
+            
+        # Определяем тир и биом локации
+        loc_tier, loc_biome = parse_location_info(loc)
+        
+        # 2. Проверка биома для ресурсов
+        res_key = None
+        for key in ['волокно', 'fiber', 'древесина', 'wood', 'кожа', 'hide', 'руда', 'ore', 'камень', 'rock']:
+            if key in t_val_lower:
+                res_key = RESOURCE_TYPE_MAP[key]
+                break
+                
+        if res_key and loc_biome:
+            allowed_res = BIOME_ALLOWED_RESOURCES.get(loc_biome, [])
+            if res_key not in allowed_res:
+                allowed_str = ", ".join([RESOURCE_RU_NAMES.get(r, r) for r in allowed_res])
+                return await interaction.response.send_message(
+                    f"❌ Ресурс **{RESOURCE_RU_NAMES.get(res_key, t_val)}** не встречается в биоме **{BIOME_RU_NAMES.get(loc_biome, loc_biome)}**!\n"
+                    f"Разрешенные ресурсы в этом биоме: {allowed_str}.",
+                    ephemeral=True
+                )
+                
+        # 3. Проверка тира локации для .4 ресурсов
+        if t_tier in RESOURCE_TIER_ALLOWED_LOCATION_TIERS and loc_tier:
+            allowed_loc_tiers = RESOURCE_TIER_ALLOWED_LOCATION_TIERS[t_tier]
+            if loc_tier not in allowed_loc_tiers:
+                allowed_str = ", ".join([f"Tier {t}" for t in allowed_loc_tiers])
+                return await interaction.response.send_message(
+                    f"❌ Ресурс **{t_tier}** не может появляться в локации **Tier {loc_tier}**!\n"
+                    f"Разрешенные тиры локаций для {t_tier}: {allowed_str}.",
+                    ephemeral=True
+                )
+                
+        # 4. Проверка и парсинг времени с учетом максимального лимита
+        max_mins = get_max_objective_minutes(t_val, t_tier)
         try:
-            spawn_time = parse_objective_time(time_left)
+            spawn_time = parse_objective_time(time_left, max_minutes=max_mins)
         except ValueError as err:
             return await interaction.response.send_message(str(err), ephemeral=True)
             
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(ephemeral=True)
         
         obj_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
         
         screenshot_url = None
         if screenshot:
             screenshot_url = screenshot.url
-            
-        loc = location.strip() if location else "Рядом"
-        
-        t_tier = tier.strip() if tier else ""
-        t_val = type.value
-        if not t_tier and ("сундук" in t_val.lower() or "chest" in t_val.lower()):
-            t_tier = "Золотой"
             
         new_obj = {
             'id': obj_id,
@@ -482,7 +690,7 @@ class ObjectivesCog(commands.Cog):
         if screenshot_url:
             embed.set_image(url=screenshot_url)
             
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @obj_add.autocomplete('tier')
     async def obj_tier_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -494,6 +702,8 @@ class ObjectivesCog(commands.Cog):
             options = ["Зеленое", "Синее", "Фиолетовое", "Золотое"]
         elif "сундук" in st_lower or "chest" in st_lower:
             options = ["Маленький", "Средний", "Золотой"]
+        elif "камень" in st_lower or "rock" in st_lower:
+            options = []
         else:
             options = ["8.4", "7.4", "6.4", "5.4", "4.4"]
             

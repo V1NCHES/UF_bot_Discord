@@ -200,7 +200,7 @@ class GeneralCog(commands.Cog):
 
     @app_commands.command(name='info', description="Список всех доступных команд")
     async def show_bot_info(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(ephemeral=True)
         
         settings = load_settings()
         guild_id = interaction.guild.id if interaction.guild else None
@@ -277,6 +277,6 @@ class GeneralCog(commands.Cog):
         if interaction.user.guild_permissions.administrator:
             embed.add_field(name="🔑 АДМИНИСТРАТОР", value="Используйте **`/info_ad`** для просмотра админ-команд.", inline=False)
 
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 async def setup(bot):
     await bot.add_cog(GeneralCog(bot))
