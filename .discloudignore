@@ -1,0 +1,11 @@
+.venv
+venv
+__pycache__
+.git
+.gitignore
+*.zip
+*.xlsx
+.env
+credentials.json
+md/
+README.md

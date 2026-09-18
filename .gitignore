@@ -1,0 +1,25 @@
+# Secrets and config files (do not commit!)
+.env
+credentials.json
+settings.json
+calls_log.xlsx
+*.xlsx
+*.zip
+
+# Agent scratch & temp files
+scratch/
+scratch_inspect.py
+implementation_plan.md
+1/
+
+# Python environment and compilation files
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# IDE config files
+.vscode/
+.idea/
