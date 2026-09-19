@@ -182,37 +182,23 @@ def parse_objective_time(time_str: str, max_minutes: int = None) -> int:
             except ValueError:
                 raise ValueError("❌ Некорректная дата или время!")
         else:
-            t_match = re.match(r'^(\d{1,2})[:.-](\d{2})(?:[:.-](\d{2}))?$', time_str)
+            t_match = re.match(r'^(\d{1,2})[:.-](\d{2})$', time_str)
             if t_match:
                 hours = int(t_match.group(1))
                 minutes = int(t_match.group(2))
-                if hours > 23 or minutes > 59:
-                    raise ValueError("❌ Некорректное время! Часы от 00 до 23, минуты от 00 до 59.")
+                if minutes > 59:
+                    raise ValueError("❌ Некорректные минуты! Минуты должны быть от 00 до 59.")
                 
-                candidate_dt = now_utc.replace(hour=hours, minute=minutes, second=0, microsecond=0)
-                
-                if candidate_dt <= now_utc:
-                    candidate_tomorrow = candidate_dt + timedelta(days=1)
-                    if max_minutes:
-                        diff_min = (candidate_tomorrow - now_utc).total_seconds() / 60
-                        if diff_min <= max_minutes:
-                            target_dt = candidate_tomorrow
-                        else:
-                            passed_min = int((now_utc - candidate_dt).total_seconds() / 60)
-                            raise ValueError(
-                                f"❌ Указанное время {hours:02d}:{minutes:02d} UTC уже прошло сегодня ({passed_min} мин. назад).\n"
-                                f"Завтрашнее время {hours:02d}:{minutes:02d} UTC превышает макс. время открытия ({max_minutes} мин.)."
-                            )
-                    else:
-                        target_dt = candidate_tomorrow
-                else:
-                    target_dt = candidate_dt
+                total_mins = hours * 60 + minutes
+                if total_mins <= 0:
+                    raise ValueError("❌ Время до открытия должно быть больше 0!")
+                target_dt = now_utc + timedelta(minutes=total_mins)
             else:
                 raise ValueError(
                     "❌ Неверный формат времени!\n"
-                    "• Укажите количество минут (например, `23`)\n"
-                    "• Или UTC время (например, `15:40`)\n"
-                    "• Или дату и UTC время (например, `18.09 15:40`)."
+                    "• Укажите длительность в 'ЧЧ:ММ' (например, `01:15` = 1 час 15 минут)\n"
+                    "• Или количество минут (например, `75`)\n"
+                    "• Или точную дату и UTC время (например, `18.09 15:40`)."
                 )
                 
     total_seconds = int((target_dt - now_utc).total_seconds())
@@ -221,9 +207,12 @@ def parse_objective_time(time_str: str, max_minutes: int = None) -> int:
         
     minutes_left = total_seconds / 60
     if max_minutes and minutes_left > max_minutes:
+        max_h = max_minutes // 60
+        max_m = max_minutes % 60
+        max_fmt = f"{max_h:02d}:{max_m:02d}" if max_h > 0 else f"{max_m} мин."
         raise ValueError(
-            f"❌ Время до открытия ({int(minutes_left)} мин.) превышает максимально допустимое "
-            f"для этого объекта ({max_minutes} мин.)!"
+            f"❌ Время до открытия ({int(minutes_left)} мин. / `{time_str}`) превышает максимально допустимое "
+            f"для этого объекта ({max_fmt} / {max_minutes} мин.)!"
         )
         
     return int(target_dt.timestamp())
@@ -238,11 +227,11 @@ def format_obj_name(obj_type: str, obj_tier: str) -> str:
     if "ядро" in t_lower or "core" in t_lower or "сфер" in t_lower or "sphere" in t_lower:
         ru_base, en_base = "Ядро", "Core"
         gender = "neuter"
-        emoji = "🔮"
+        emoji = ""
     elif "вихрь" in t_lower or "vortex" in t_lower:
         ru_base, en_base = "Вихрь", "Vortex"
         gender = "masculine"
-        emoji = "🌀"
+        emoji = ""
     elif "волокно" in t_lower or "fiber" in t_lower:
         ru_base, en_base = "Волокно", "Fiber"
         emoji = "🌻"
@@ -266,9 +255,10 @@ def format_obj_name(obj_type: str, obj_tier: str) -> str:
     elif "ресурс" in t_lower or "node" in t_lower:
         ru_base, en_base = "Ресурс", "Resource"
         gender = "masculine"
+        emoji = ""
     elif "сундук" in t_lower or "chest" in t_lower:
         ru_base, en_base = "Сундук", "Chest"
-        emoji = "🎁"
+        emoji = ""
         gender = "masculine"
     else:
         ru_base = obj_type.split('(')[0].strip()
@@ -343,6 +333,71 @@ def format_obj_name(obj_type: str, obj_tier: str) -> str:
     else:
         return f"{prefix}{ru_base} {r_tier} ({en_base} {r_tier})"
 
+def format_remaining_time_info(spawn_timestamp: int) -> tuple[str, str]:
+    now = int(time.time())
+    diff = spawn_timestamp - now
+    rem_mins = max(0, int(diff / 60))
+    if rem_mins >= 60:
+        rem_str = f"{rem_mins // 60}ч {rem_mins % 60}мин"
+    else:
+        rem_str = f"{rem_mins} мин"
+        
+    utc_dt = datetime.fromtimestamp(spawn_timestamp, tz=timezone.utc)
+    utc_str = utc_dt.strftime("%H:%M UTC")
+    return rem_str, utc_str
+
+def format_objectives_summary(objs, now: int) -> str:
+    if not objs:
+        return "🗺️ *На данный момент активных объектов нет. Вы можете добавить цель с помощью команды `/obj_add`.*"
+        
+    categories = {
+        'cores': [],     # 🔮 Сферы / Ядра
+        'vortices': [],  # 🌀 Вихри
+        'res4': [],      # 💎 Ресурсы .4
+        'chests': [],    # 🎁 Сундуки
+        'other': []      # 📁 Другое
+    }
+    
+    for o in objs:
+        t_low = (o.get('type') or "").lower()
+        if "ядро" in t_low or "core" in t_low or "сфер" in t_low or "sphere" in t_low:
+            categories['cores'].append(o)
+        elif "вихрь" in t_low or "vortex" in t_low:
+            categories['vortices'].append(o)
+        elif "сундук" in t_low or "chest" in t_low:
+            categories['chests'].append(o)
+        elif any(k in t_low for k in ['волокно', 'fiber', 'древесина', 'wood', 'кожа', 'hide', 'руда', 'ore', 'камень', 'rock', 'ресурс', 'node']):
+            categories['res4'].append(o)
+        else:
+            categories['other'].append(o)
+            
+    sections = []
+    sec_info = [
+        ('cores', "🔮 **Сферы / Ядра**"),
+        ('vortices', "🌀 **Вихри**"),
+        ('res4', "💎 **Ресурсы .4**"),
+        ('chests', "🎁 **Сундуки**"),
+        ('other', "📁 **Другие объекты**")
+    ]
+    
+    for key, title in sec_info:
+        item_list = categories[key]
+        if not item_list:
+            continue
+        item_list.sort(key=lambda x: x['time'])
+        lines = [f"{title}:"]
+        for o in item_list:
+            rem_str, utc_str = format_remaining_time_info(o['time'])
+            obj_name = format_obj_name(o['type'], o['tier'])
+            author_display = o.get('author_name') or f"<@{o['author_id']}>"
+            line = f"• {obj_name} | 📍 **{o['location']}** | ⏰ **{rem_str}** (<t:{o['time']}:t> / {utc_str}) | 👤 {author_display}"
+            if o.get('screenshot_url'):
+                line += f" [📸]({o['screenshot_url']})"
+            lines.append(line)
+        sections.append("\n".join(lines))
+        
+    return "\n\n".join(sections)
+
 async def update_objectives_dashboard(guild):
     settings = load_settings()
     channel_id = get_setting(settings, guild.id, 'objectives_channel_id')
@@ -362,37 +417,14 @@ async def update_objectives_dashboard(guild):
         color=discord.Color.from_str("#7D00FF")
     )
     
-    desc = (
+    header = (
         "🗺️ Актуальный список игровых целей на карте:\n"
-        "🌀 — Вихри\n"
-        "🔮 — Ядра\n"
-        "💎 — Ресурсы .4\n"
-        "🎁 — Сундуки\n\n"
-        "🔄 *Автоматическое обновление каждую минуту.*"
+        "🌀 — Вихри | 🔮 — Ядра / Сферы | 💎 — Ресурсы .4 | 🎁 — Сундуки\n\n"
+        "🔄 *Автоматическое обновление каждую минуту.*\n\n"
     )
     
-    if not objs:
-        desc += "\n\n*На данный момент активных объектов нет. Вы можете добавить цель с помощью команды `/obj_add`.*"
-    else:
-        desc += "\n\n"
-        for i, o in enumerate(objs):
-            time_left = o['time'] - now
-            status = "⏳ Ожидание" if time_left > 0 else "🔥 Активен"
-            
-            obj_name = format_obj_name(o['type'], o['tier'])
-            desc += f" - {obj_name} [{o['id']}]\n"
-            desc += f"📍 Локация: {o['location']}\n"
-            desc += f"⏰ Открытие: <t:{o['time']}:R> (<t:{o['time']}:T>)\n"
-            desc += f"👤 Нашел: <@{o['author_id']}>\n"
-            desc += f"📊 Статус: {status}"
-            
-            if o.get('screenshot_url'):
-                desc += f"\n [Фото ссылка]({o['screenshot_url']})"
-                
-            if i < len(objs) - 1:
-                desc += "\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
-                
-    embed.description = desc
+    summary_text = format_objectives_summary(objs, now)
+    embed.description = header + summary_text
     embed.set_footer(text="Discord Bot UF • Автообновление")
     embed.timestamp = discord.utils.utcnow()
     
@@ -484,6 +516,21 @@ class ObjectivesCog(commands.Cog):
                     if now >= o['time']:
                         changed = True
                         print(f"Объект {o['id']} ({o['type']}) удален как прошедший по времени.")
+                        # Авто-удаление предупреждающих сообщений
+                        warning_msg_map = o.get('warning_msg_ids', {})
+                        for g_id, msg_info in warning_msg_map.items():
+                            try:
+                                c_id = msg_info.get('channel_id')
+                                m_id = msg_info.get('message_id')
+                                if c_id and m_id:
+                                    g_obj = self.bot.get_guild(int(g_id))
+                                    ch_obj = g_obj.get_channel(c_id) if g_obj else None
+                                    if ch_obj:
+                                        w_msg = await ch_obj.fetch_message(m_id)
+                                        await w_msg.delete()
+                                        print(f"Предупреждение по объекту {o['id']} успешно удалено после открытия.")
+                            except Exception as del_err:
+                                print(f"Не удалось удалить предупреждающее сообщение объекта {o['id']}: {del_err}")
                         continue
                     active_objs.append(o)
                     
@@ -507,19 +554,26 @@ class ObjectivesCog(commands.Cog):
                                 if channel_id:
                                     channel = guild.get_channel(channel_id)
                                     if channel:
+                                        rem_str, utc_str = format_remaining_time_info(o['time'])
+                                        author_disp = o.get('author_name') or f"<@{o['author_id']}>"
                                         embed = discord.Embed(
                                             title=f"⏳ СКОРО ОТКРЫТИЕ: {format_obj_name(o['type'], o['tier'])}",
                                             description=(
                                                 f"📍 **Локация:** {o['location']}\n"
-                                                f"⏰ **Открытие через 15 минут!** (<t:{o['time']}:R>)\n"
-                                                f"👤 **Обнаружил:** <@{o['author_id']}>"
+                                                f"⏰ **Открытие через:** **{rem_str}** (<t:{o['time']}:t> / {utc_str})\n"
+                                                f"👤 **Обнаружил:** {author_disp}"
                                             ),
                                             color=discord.Color.gold()
                                         )
                                         if o.get('screenshot_url'):
                                             embed.set_image(url=o['screenshot_url'])
                                         try:
-                                            await channel.send(content="@here", embed=embed)
+                                            sent_msg = await channel.send(content="@here", embed=embed)
+                                            w_map = o.setdefault('warning_msg_ids', {})
+                                            w_map[guild_id_str] = {
+                                                "channel_id": channel.id,
+                                                "message_id": sent_msg.id
+                                            }
                                         except Exception as err:
                                             print(f"Ошибка отправки пинга объекта в гильдии {guild.id}: {err}")
                                 pinged_guilds.append(guild_id_str)
@@ -658,6 +712,7 @@ class ObjectivesCog(commands.Cog):
         if screenshot:
             screenshot_url = screenshot.url
             
+        author_name = interaction.user.display_name or interaction.user.name
         new_obj = {
             'id': obj_id,
             'type': type.value,
@@ -665,6 +720,7 @@ class ObjectivesCog(commands.Cog):
             'location': loc,
             'time': spawn_time,
             'author_id': interaction.user.id,
+            'author_name': author_name,
             'screenshot_url': screenshot_url,
             'warning_pinged': False
         }
@@ -676,14 +732,14 @@ class ObjectivesCog(commands.Cog):
         
         await update_objectives_dashboard(interaction.guild)
         
+        rem_str, utc_str = format_remaining_time_info(spawn_time)
         embed = discord.Embed(
             title=f"✅ ОБЪЕКТ ДОБАВЛЕН: {format_obj_name(type.value, t_tier)}",
             description=(
-                f"🆔 **ID:** {obj_id}\n"
                 f"🔹 **Тир/Цвет:** {t_tier if t_tier else 'Не указан'}\n"
                 f"📍 **Локация:** {loc}\n"
-                f"⏰ **Открытие через:** <t:{spawn_time}:R> (<t:{spawn_time}:T>)\n"
-                f"👤 **Нашел:** {interaction.user.mention}"
+                f"⏰ **Открытие через:** **{rem_str}** (<t:{spawn_time}:t> / {utc_str})\n"
+                f"👤 **Нашел:** {author_name}"
             ),
             color=discord.Color.green()
         )
@@ -715,21 +771,67 @@ class ObjectivesCog(commands.Cog):
 
     @obj_add.autocomplete('location')
     async def obj_location_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        selected_type = interaction.namespace.type or ""
+        selected_tier = interaction.namespace.tier or ""
+        st_lower = selected_type.lower()
+        
+        res_key = None
+        for key in ['волокно', 'fiber', 'древесина', 'wood', 'кожа', 'hide', 'руда', 'ore', 'камень', 'rock']:
+            if key in st_lower:
+                res_key = RESOURCE_TYPE_MAP[key]
+                break
+                
+        allowed_tiers_for_loc = RESOURCE_TIER_ALLOWED_LOCATION_TIERS.get(selected_tier, None)
+        
+        filtered_locations = []
+        for val, name in ALBION_LOCATIONS:
+            loc_tier, loc_biome = parse_location_info(val)
+            
+            if res_key and loc_biome:
+                allowed_res = BIOME_ALLOWED_RESOURCES.get(loc_biome, [])
+                if res_key not in allowed_res:
+                    continue
+                    
+            if allowed_tiers_for_loc and loc_tier:
+                if loc_tier not in allowed_tiers_for_loc:
+                    continue
+                    
+            filtered_locations.append((val, name))
+            
         choices = []
         current_lower = current.lower()
         
         if not current_lower:
             choices.append(app_commands.Choice(name="📍 Оставить без названия (Рядом)", value="Рядом"))
-            for val, name in ALBION_LOCATIONS[:24]:
+            for val, name in filtered_locations[:24]:
                 choices.append(app_commands.Choice(name=name, value=val))
             return choices
             
-        for val, name in ALBION_LOCATIONS:
+        for val, name in filtered_locations:
             if current_lower in val.lower() or current_lower in name.lower():
                 choices.append(app_commands.Choice(name=name, value=val))
                 if len(choices) >= 25:
                     break
         return choices
+
+    @obj_add.autocomplete('time_left')
+    async def obj_time_left_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        suggestions = [
+            ("10 (через 10 минут)", "10"),
+            ("15 (через 15 минут)", "15"),
+            ("20 (через 20 минут)", "20"),
+            ("30 (через 30 минут)", "30"),
+            ("45 (через 45 минут)", "45"),
+            ("60 (через 1 час)", "60"),
+            ("120 (через 2 часа)", "120"),
+            ("240 (через 4 часа)", "240")
+        ]
+        choices = []
+        current_lower = current.lower()
+        for label, val in suggestions:
+            if current_lower in val or current_lower in label.lower():
+                choices.append(app_commands.Choice(name=label, value=val))
+        return choices[:25]
 
     @app_commands.command(name='obj_list', description="Вывод списка всех активных объектов")
     async def obj_list(self, interaction: discord.Interaction):
@@ -745,26 +847,8 @@ class ObjectivesCog(commands.Cog):
         )
         
         now = int(time.time())
-        
-        desc = ""
-        for i, o in enumerate(objs):
-            time_left = o['time'] - now
-            status = "⏳ Ожидание" if time_left > 0 else "🔥 Активен"
-            
-            obj_name = format_obj_name(o['type'], o['tier'])
-            desc += f" - {obj_name} [{o['id']}]\n"
-            desc += f"📍 Локация: {o['location']}\n"
-            desc += f"⏰ Открытие: <t:{o['time']}:R> (<t:{o['time']}:T>)\n"
-            desc += f"👤 Нашел: <@{o['author_id']}>\n"
-            desc += f"📊 Статус: {status}"
-            
-            if o.get('screenshot_url'):
-                desc += f"\n [Фото ссылка]({o['screenshot_url']})"
-                
-            if i < len(objs) - 1:
-                desc += "\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
-                
-        embed.description = desc
+        summary_text = format_objectives_summary(objs, now)
+        embed.description = summary_text
         embed.set_footer(text="United Force • Список игровых целей")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

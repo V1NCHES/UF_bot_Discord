@@ -163,12 +163,12 @@ async def save_members_to_uf_async(members, guild_id=None):
 def save_members_to_uf(members, guild_id=None):
     """Добавление только новых участников в Google Таблицу 'UF' и поиск тех, кто покинул сервер"""
     if not os.path.exists(config.CREDENTIALS_FILE):
-        return [], 0, []
+        raise FileNotFoundError(f"Файл credentials.json не найден по пути: {config.CREDENTIALS_FILE}")
     
     try:
         client = get_gspread_client()
         if not client:
-            return [], 0, []
+            raise ConnectionError("Не удалось подключиться к Google Таблицам")
         
         sheet = get_sheet_by_type(client, "uf", guild_id=guild_id)
 

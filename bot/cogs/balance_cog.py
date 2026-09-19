@@ -188,9 +188,14 @@ class BalanceCog(commands.Cog):
         
         try:
             all_members = []
-            async for member in interaction.guild.fetch_members(limit=None):
-                if not member.bot:
-                    all_members.append(member)
+            if interaction.guild:
+                try:
+                    async for member in interaction.guild.fetch_members(limit=None):
+                        if not member.bot:
+                            all_members.append(member)
+                except Exception as fetch_err:
+                    print(f"[Предупреждение] fetch_members не удался ({fetch_err}), используем кэш гильдии.")
+                    all_members = [m for m in interaction.guild.members if not m.bot]
             
             guild_id = interaction.guild.id if interaction.guild else None
             new_members, total_in_sheet, missing_from_discord = await logger.save_members_to_uf_async(all_members, guild_id=guild_id)
